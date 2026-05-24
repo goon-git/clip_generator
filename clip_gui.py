@@ -9,6 +9,8 @@ Dependencies:
     clip_generator.py must be in the same directory
 """
 
+import base64
+import io
 import queue
 import random
 import subprocess
@@ -172,6 +174,58 @@ def row_label(parent, text, width=16):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# TOOLTIP
+# ══════════════════════════════════════════════════════════════════════
+
+class ToolTip:
+    """Shows a styled popup when the user hovers over a widget."""
+    PAD      = 6
+    DELAY_MS = 500
+    WRAP     = 280
+
+    def __init__(self, widget, text: str):
+        self._widget  = widget
+        self._text    = text
+        self._id      = None
+        self._tip_win = None
+        widget.bind("<Enter>",  self._on_enter, add="+")
+        widget.bind("<Leave>",  self._on_leave, add="+")
+        widget.bind("<Button>", self._on_leave, add="+")
+
+    def _on_enter(self, _=None):
+        self._id = self._widget.after(self.DELAY_MS, self._show)
+
+    def _on_leave(self, _=None):
+        if self._id:
+            self._widget.after_cancel(self._id)
+            self._id = None
+        self._hide()
+
+    def _show(self):
+        if self._tip_win:
+            return
+        x = self._widget.winfo_rootx() + 20
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._tip_win = tw = tk.Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tw.configure(bg=ST["amber"])
+        tk.Label(
+            tw, text=self._text,
+            font=ST["font_small"],
+            fg=ST["bg_deep"], bg=ST["amber"],
+            wraplength=self.WRAP,
+            justify="left",
+            padx=self.PAD, pady=self.PAD,
+        ).pack()
+
+    def _hide(self):
+        if self._tip_win:
+            self._tip_win.destroy()
+            self._tip_win = None
+
+
+# ══════════════════════════════════════════════════════════════════════
 # SCROLLABLE FRAME
 # ══════════════════════════════════════════════════════════════════════
 
@@ -239,6 +293,11 @@ class ClipRow(tk.Frame):
                                 font=ST["font_label"], padx=5, pady=1)
         self.num_lbl.pack(side="left")
 
+        entry_tips = {
+            "label_var": "Name used for the output filename",
+            "start_var": "Clip start time (M:SS format, e.g. 1:30)",
+            "end_var":   "Clip end time (M:SS format, e.g. 2:15)",
+        }
         for lbl, attr, w, default in [
             ("Label", "label_var", 10, f"clip_{self.index:02d}"),
             ("Start", "start_var", 6,  "0:00"),
@@ -248,20 +307,33 @@ class ClipRow(tk.Frame):
                      fg=ST["text_dim"], font=ST["font_label"]).pack(side="left", padx=(8,2))
             v = tk.StringVar(value=default)
             setattr(self, attr, v)
-            st_entry(hdr, width=w, textvariable=v).pack(side="left")
+            e = st_entry(hdr, width=w, textvariable=v)
+            e.pack(side="left")
+            ToolTip(e, entry_tips[attr])
 
-        st_button(hdr, "✕", command=lambda: self.remove_cb(self),
-                  small=True).pack(side="right")
-        st_button(hdr, "⊡ Preview", command=lambda: self.preview_cb(self),
-                  small=True).pack(side="right", padx=(0, 4))
-        self._detail_btn = st_button(hdr, "▸ fx",
-                                      command=self._toggle_detail, small=True)
+        rm_btn = st_button(hdr, "✕", command=lambda: self.remove_cb(self), small=True)
+        rm_btn.pack(side="right")
+        ToolTip(rm_btn, "Remove this clip")
+
+        prev_btn = st_button(hdr, "⊡ Preview", command=lambda: self.preview_cb(self), small=True)
+        prev_btn.pack(side="right", padx=(0, 4))
+        ToolTip(prev_btn, "Extract a frame from this clip's midpoint and show it in the preview panel")
+
+        self._detail_btn = st_button(hdr, "▸ fx", command=self._toggle_detail, small=True)
         self._detail_btn.pack(side="right", padx=(0, 4))
+        ToolTip(self._detail_btn, "Show / hide per-clip effect controls")
 
         # ── Effects checkboxes ──
         fx_row = tk.Frame(self, bg=ST["bg_mid"])
         fx_row.pack(fill="x", padx=6, pady=(0, 4))
 
+        fx_tips = {
+            "vintage":  "Warm vintage color grade (sepia tones, faded highlights)",
+            "vignette": "Darken the edges of the frame",
+            "grain":    "Add film grain texture",
+            "fade_in":  "Fade in from black at the start of the clip",
+            "fade_out": "Fade out to black at the end of the clip",
+        }
         self.fx_vars = {}
         for fx in ("vintage", "vignette", "grain", "fade_in", "fade_out"):
             v = tk.BooleanVar(value=False)
@@ -269,6 +341,7 @@ class ClipRow(tk.Frame):
             cb = st_check(fx_row, text=fx, variable=v)
             cb.configure(bg=ST["bg_mid"])
             cb.pack(side="left", padx=(0, 8))
+            ToolTip(cb, fx_tips[fx])
 
         # ── Detail panel ──
         self._detail = tk.Frame(self, bg=ST["bg_lift"])
@@ -384,15 +457,22 @@ class CaptionRow(tk.Frame):
                                 font=ST["font_label"], padx=5, pady=1)
         self.num_lbl.pack(side="left")
 
+        caption_tips = {
+            "hook_var":    "Short text displayed at the top of the clip (the hook / attention-grabber)",
+            "caption_var": "Text displayed at the bottom of the clip (the caption / CTA)",
+        }
         for lbl, attr in [("Hook", "hook_var"), ("Caption", "caption_var")]:
             tk.Label(row, text=lbl, bg=ST["bg_mid"],
                      fg=ST["text_dim"], font=ST["font_label"]).pack(side="left", padx=(8,2))
             v = tk.StringVar()
             setattr(self, attr, v)
-            st_entry(row, width=24, textvariable=v).pack(side="left")
+            e = st_entry(row, width=24, textvariable=v)
+            e.pack(side="left")
+            ToolTip(e, caption_tips[attr])
 
-        st_button(row, "✕", command=lambda: remove_cb(self),
-                  small=True).pack(side="right")
+        rm_btn = st_button(row, "✕", command=lambda: remove_cb(self), small=True)
+        rm_btn.pack(side="right")
+        ToolTip(rm_btn, "Remove this caption")
 
     def get_dict(self):
         return {"hook": self.hook_var.get(),
@@ -627,6 +707,22 @@ class App(tk.Tk):
         tk.Frame(hdr, bg=ST["amber_dim"], width=1).pack(side="left", fill="y")
         inner = tk.Frame(hdr, bg=ST["bg_deep"])
         inner.pack(side="left", fill="both", expand=True, padx=18)
+
+        # Logo
+        self._header_logo_img = None
+        if PIL_AVAILABLE:
+            try:
+                logo_b64_path = Path(__file__).parent / "assets" / "logo_b64.txt"
+                if logo_b64_path.exists():
+                    img_data = base64.b64decode(logo_b64_path.read_text().strip())
+                    img = Image.open(io.BytesIO(img_data)).convert("RGBA")
+                    img.thumbnail((36, 36), Image.LANCZOS)
+                    self._header_logo_img = ImageTk.PhotoImage(img)
+                    tk.Label(inner, image=self._header_logo_img,
+                             bg=ST["bg_deep"]).pack(side="left", padx=(0, 12))
+            except Exception:
+                pass
+
         tk.Label(inner, text="STELLAR THEORY", bg=ST["bg_deep"],
                  fg=ST["amber"], font=("Georgia", 18, "bold")).pack(
                      side="left", pady=12)
@@ -661,13 +757,18 @@ class App(tk.Tk):
         clip_hdr.pack(fill="x", padx=10, pady=(8, 4))
         tk.Label(clip_hdr, text="CLIPS", bg=ST["bg_dark"],
                  fg=ST["amber"], font=ST["font_label"]).pack(side="left")
+        clip_btn_tips = {
+            "+ Add":     "Add a new clip — set its start time, end time, and label",
+            "Save YAML": "Export the current clip list to a YAML file",
+            "Load YAML": "Import clips from a previously saved YAML file",
+        }
         for lbl, cmd in [("+ Add", self._add_clip),
                           ("Save YAML", self._save_clips_yaml),
                           ("Load YAML", self._load_clips_yaml)]:
             accent = lbl == "+ Add"
-            st_button(clip_hdr, lbl, command=cmd,
-                      small=True, accent=accent).pack(
-                          side="right", padx=(0, 4))
+            b = st_button(clip_hdr, lbl, command=cmd, small=True, accent=accent)
+            b.pack(side="right", padx=(0, 4))
+            ToolTip(b, clip_btn_tips[lbl])
 
         self.clips_scroll = ScrollFrame(clips_pane)
         self.clips_scroll.pack(fill="both", expand=True, padx=4, pady=(0, 4))
@@ -700,13 +801,18 @@ class App(tk.Tk):
         cap_hdr.pack(fill="x", padx=10, pady=(8, 4))
         tk.Label(cap_hdr, text="HOOKS & CAPTIONS", bg=ST["bg_dark"],
                  fg=ST["amber"], font=ST["font_label"]).pack(side="left")
+        cap_btn_tips = {
+            "+ Add":     "Add a new hook/caption pair",
+            "Save YAML": "Export the current caption list to a YAML file",
+            "Load YAML": "Import captions from a previously saved YAML file",
+        }
         for lbl, cmd in [("+ Add", self._add_caption),
                           ("Save YAML", self._save_captions_yaml),
                           ("Load YAML", self._load_captions_yaml)]:
             accent = lbl == "+ Add"
-            st_button(cap_hdr, lbl, command=cmd,
-                      small=True, accent=accent).pack(
-                          side="right", padx=(0, 4))
+            b = st_button(cap_hdr, lbl, command=cmd, small=True, accent=accent)
+            b.pack(side="right", padx=(0, 4))
+            ToolTip(b, cap_btn_tips[lbl])
 
         tk.Label(tab,
                  text="Captions are assigned to clips in order. "
@@ -734,9 +840,10 @@ class App(tk.Tk):
         self._video_entry = st_entry(src_row, width=40,
                                       textvariable=self.video_path)
         self._video_entry.pack(side="left", fill="x", expand=True)
-        st_button(src_row, "Browse",
-                  command=self._browse_video, small=True).pack(
-                      side="right", padx=(4, 0))
+        ToolTip(self._video_entry, "Path to your source video file")
+        src_browse = st_button(src_row, "Browse", command=self._browse_video, small=True)
+        src_browse.pack(side="right", padx=(4, 0))
+        ToolTip(src_browse, "Open a file picker to select your source video")
         self.vid_info = tk.Label(p, text="", bg=ST["bg_dark"],
                                   fg=ST["text_dim"], font=ST["font_small"])
         self.vid_info.pack(anchor="w", padx=12)
@@ -744,33 +851,37 @@ class App(tk.Tk):
         section_header(p, "OUTPUT FOLDER")
         out_row = tk.Frame(p, bg=ST["bg_dark"])
         out_row.pack(fill="x", padx=10, pady=(2, 4))
-        st_entry(out_row, width=40,
-                 textvariable=self.output_dir).pack(
-                     side="left", fill="x", expand=True)
-        st_button(out_row, "Browse",
-                  command=self._browse_output, small=True).pack(
-                      side="right", padx=(4, 0))
+        out_entry = st_entry(out_row, width=40, textvariable=self.output_dir)
+        out_entry.pack(side="left", fill="x", expand=True)
+        ToolTip(out_entry, "Folder where rendered clips will be saved")
+        out_browse = st_button(out_row, "Browse", command=self._browse_output, small=True)
+        out_browse.pack(side="right", padx=(4, 0))
+        ToolTip(out_browse, "Choose the output folder")
 
         # ── Format ──
         section_header(p, "FORMAT")
         fmt = tk.Frame(p, bg=ST["bg_dark"])
         fmt.pack(fill="x", padx=10, pady=(2, 8))
 
-        def frow(label, widget_fn, row):
+        def frow(label, widget_fn, row, tip=""):
             row_label(fmt, label).grid(row=row, column=0, sticky="w", pady=3)
             w = widget_fn()
             w.grid(row=row, column=1, sticky="w", padx=(8, 0), pady=3)
+            if tip:
+                ToolTip(w, tip)
             return w
 
         self.orientation_var = tk.StringVar(value="vertical")
         frow("Orientation", lambda: st_combo(
             fmt, values=["vertical", "horizontal (keep original)"],
-            width=26, textvariable=self.orientation_var), 0)
+            width=26, textvariable=self.orientation_var), 0,
+            tip="Vertical outputs 9:16 for short-form video. Horizontal keeps the original aspect ratio.")
 
         self.fit_mode_var = tk.StringVar(value="blur_fill")
         frow("Fit Mode", lambda: st_combo(
             fmt, values=["crop", "fit", "blur_fill"],
-            width=12, textvariable=self.fit_mode_var), 1)
+            width=12, textvariable=self.fit_mode_var), 1,
+            tip="How the source video fills the frame. blur_fill adds a blurred background, crop removes edges, fit adds black bars.")
 
         self.crop_offset_var = tk.DoubleVar(value=0.5)
         def _make_crop_row():
@@ -804,19 +915,22 @@ class App(tk.Tk):
         ts = tk.Frame(p, bg=ST["bg_dark"])
         ts.pack(fill="x", padx=10, pady=(2, 8))
         self.style_vars = {}
-        fields = [("Hook Font Size", "hook_font_size", "72"),
-                  ("Caption Font Size", "caption_font_size", "58"),
-                  ("Font Color", "font_color", "white"),
-                  ("Box Color", "box_color", "black@0.5"),
-                  ("Hook Y", "hook_y", "80"),
-                  ("Caption Y", "caption_y", "h-200"),
-                  ("Font File", "font_file", "")]
-        for i, (lbl, key, default) in enumerate(fields):
+        fields = [
+            ("Hook Font Size",    "hook_font_size",    "72",     "Font size for the hook text at the top of the clip"),
+            ("Caption Font Size", "caption_font_size", "58",     "Font size for the caption text at the bottom"),
+            ("Font Color",        "font_color",        "white",  "Text color — any ffmpeg color value (e.g. white, #FFDD88)"),
+            ("Box Color",         "box_color",         "black@0.5", "Background box behind text — color@opacity (e.g. black@0.5)"),
+            ("Hook Y",            "hook_y",            "80",     "Vertical position of the hook in pixels from the top"),
+            ("Caption Y",         "caption_y",         "h-200",  "Vertical position of the caption (h-200 = 200px from the bottom)"),
+            ("Font File",         "font_file",         "",       "Path to a .ttf font file. Leave blank to use the ffmpeg default."),
+        ]
+        for i, (lbl, key, default, tip) in enumerate(fields):
             row_label(ts, lbl).grid(row=i, column=0, sticky="w", pady=2)
             v = tk.StringVar(value=default)
             self.style_vars[key] = v
-            st_entry(ts, width=22, textvariable=v).grid(
-                row=i, column=1, sticky="w", padx=(8,0), pady=2)
+            e = st_entry(ts, width=22, textvariable=v)
+            e.grid(row=i, column=1, sticky="w", padx=(8,0), pady=2)
+            ToolTip(e, tip)
 
         # ── Logo ──
         section_header(p, "LOGO OVERLAY")
@@ -824,18 +938,19 @@ class App(tk.Tk):
         lo.pack(fill="x", padx=10, pady=(2, 8))
 
         self.logo_enabled = tk.BooleanVar(value=False)
-        st_check(lo, text="Enable logo overlay",
-                 variable=self.logo_enabled).pack(anchor="w", pady=(0, 4))
+        logo_cb = st_check(lo, text="Enable logo overlay", variable=self.logo_enabled)
+        logo_cb.pack(anchor="w", pady=(0, 4))
+        ToolTip(logo_cb, "Overlay your logo onto each rendered clip")
 
         lpath = tk.Frame(lo, bg=ST["bg_dark"])
         lpath.pack(fill="x", pady=2)
         row_label(lpath, "File").pack(side="left")
-        st_entry(lpath, width=28,
-                 textvariable=self.logo_path_var).pack(
-                     side="left", fill="x", expand=True)
-        st_button(lpath, "Browse",
-                  command=self._browse_logo, small=True).pack(
-                      side="right", padx=(4, 0))
+        logo_entry = st_entry(lpath, width=28, textvariable=self.logo_path_var)
+        logo_entry.pack(side="left", fill="x", expand=True)
+        ToolTip(logo_entry, "Path to your logo image (PNG recommended for transparency)")
+        logo_browse = st_button(lpath, "Browse", command=self._browse_logo, small=True)
+        logo_browse.pack(side="right", padx=(4, 0))
+        ToolTip(logo_browse, "Select your logo image file")
 
         lg = tk.Frame(lo, bg=ST["bg_dark"])
         lg.pack(fill="x", pady=2)
@@ -875,10 +990,12 @@ class App(tk.Tk):
         opt.pack(fill="x", padx=10, pady=(2, 16))
         self.shuffle_var = tk.BooleanVar(value=False)
         self.dry_run_var = tk.BooleanVar(value=False)
-        st_check(opt, text="Shuffle captions",
-                 variable=self.shuffle_var).pack(anchor="w")
-        st_check(opt, text="Dry run (no render)",
-                 variable=self.dry_run_var).pack(anchor="w")
+        shuffle_cb = st_check(opt, text="Shuffle captions", variable=self.shuffle_var)
+        shuffle_cb.pack(anchor="w")
+        ToolTip(shuffle_cb, "Randomly assign captions to clips instead of in order")
+        dry_cb = st_check(opt, text="Dry run (no render)", variable=self.dry_run_var)
+        dry_cb.pack(anchor="w")
+        ToolTip(dry_cb, "Build the ffmpeg commands without rendering — useful for debugging")
 
     # ── Bottom bar ────────────────────────────────────────────────────
 
@@ -903,9 +1020,12 @@ class App(tk.Tk):
             command=self._start_render, accent=True)
         self.render_btn.configure(font=("Georgia", 12, "bold"), padx=20, pady=8)
         self.render_btn.pack(side="right", pady=8)
-        st_button(btn_row, "Preview Frame",
-                  command=lambda: self._preview_clip(None)).pack(
-                      side="right", padx=(0, 8), pady=8)
+        ToolTip(self.render_btn, "Process all clips with current settings and save to the output folder")
+
+        prev_btn = st_button(btn_row, "Preview Frame",
+                             command=lambda: self._preview_clip(None))
+        prev_btn.pack(side="right", padx=(0, 8), pady=8)
+        ToolTip(prev_btn, "Extract a frame from the first clip for a quick settings check")
 
     # ── Clip management ───────────────────────────────────────────────
 
